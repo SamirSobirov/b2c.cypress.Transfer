@@ -1,0 +1,19 @@
+{
+  "name": "b2c.cypress.transfer",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "npm run cy:run",
+    "cy:open": "env -u ELECTRON_RUN_AS_NODE cypress open",
+    "cy:run": "env -u ELECTRON_RUN_AS_NODE cypress run"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@cypress/xpath": "^2.0.3",
+    "cypress": "^15.19.0"
+  }
+}

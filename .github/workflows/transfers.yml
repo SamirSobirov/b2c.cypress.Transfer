@@ -1,0 +1,125 @@
+name: B2C Transfer Search AutoTest
+
+on:
+  schedule:
+    - cron: '0 */5 * * *'
+  workflow_dispatch:
+    inputs:
+      user_chat_id:
+        description: 'ID чата для личного ответа'
+        required: false
+        default: ''
+
+jobs:
+  cypress-run:
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cypress run
+        id: cypress
+        timeout-minutes: 15
+        uses: cypress-io/github-action@v6
+        with:
+          spec: cypress/e2e/transfers.cy.js
+          browser: chrome
+        env:
+          CYPRESS_LOGIN_EMAIL: ${{ secrets.LOGIN_EMAIL }}
+          CYPRESS_LOGIN_PASSWORD: ${{ secrets.LOGIN_PASSWORD }}
+        continue-on-error: true
+
+      - name: Parse Diagnostic Data
+        if: always()
+        run: |
+          # Тест пишет три файла: HTTP-код авторизации, HTTP-код поиска трансфера
+          # и количество предложений в выдаче. Значения по умолчанию
+          # (UNKNOWN / N/A) он выставляет в beforeEach, поэтому "UNKNOWN" здесь
+          # означает "до этого шага прогон не дошёл", а не "файла нет".
+          # tr -d убирает пробелы и перевод строки, которые добавляются в CI.
+          if [ -f auth_api_status.txt ]; then
+            AUTH_STATUS=$(cat auth_api_status.txt | tr -d '[:space:]')
+          else
+            AUTH_STATUS="UNKNOWN"
+          fi
+
+          if [ -f api_status.txt ]; then
+            API_STATUS=$(cat api_status.txt | tr -d '[:space:]')
+          else
+            API_STATUS="UNKNOWN"
+          fi
+
+          if [ -f offers_count.txt ]; then
+            COUNT=$(cat offers_count.txt | tr -d '[:space:]')
+          else
+            COUNT="N/A"
+          fi
+
+          # Исход самого прогона Cypress: success / failure
+          TEST_RESULT="${{ steps.cypress.outcome }}"
+
+          echo "auth=$AUTH_STATUS search=$API_STATUS offers=$COUNT cypress=$TEST_RESULT"
+
+          # Порядок ветвлений = порядок шагов теста: сначала отделяем падения
+          # авторизации от падений поиска, иначе всё сливается в один 🔴 и по
+          # уведомлению непонятно, где именно сломалось.
+          if [[ ! "$AUTH_STATUS" =~ ^[0-9]+$ ]]; then
+            # Запрос логина даже не ушёл: упал UI, не открылась модалка входа
+            # или не заданы секреты LOGIN_EMAIL / LOGIN_PASSWORD
+            echo "MSG_STATUS=🔴 Test Crashed (UI Error)" >> $GITHUB_ENV
+            echo "MSG_COUNT=N/A" >> $GITHUB_ENV
+          elif [[ "$AUTH_STATUS" -ge 400 ]]; then
+            echo "MSG_STATUS=🔴 Auth Error HTTP $AUTH_STATUS" >> $GITHUB_ENV
+            echo "MSG_COUNT=Error" >> $GITHUB_ENV
+          elif [[ ! "$API_STATUS" =~ ^[0-9]+$ ]]; then
+            # Вошли, но поисковый запрос не ушёл. Для трансферов типичная причина:
+            # адрес напечатан, но не выбран из подсказок Yandex — тогда у точки
+            # нет координат и кнопка "Поиск" молча ничего не делает.
+            echo "MSG_STATUS=🔴 Search Not Started (UI Error)" >> $GITHUB_ENV
+            echo "MSG_COUNT=N/A" >> $GITHUB_ENV
+          elif [[ "$API_STATUS" -ge 400 ]]; then
+            echo "MSG_STATUS=🔴 Server Error HTTP $API_STATUS" >> $GITHUB_ENV
+            echo "MSG_COUNT=Error" >> $GITHUB_ENV
+          elif [[ "$COUNT" == "0" ]]; then
+            echo "MSG_STATUS=⚪ No Offers" >> $GITHUB_ENV
+            echo "MSG_COUNT=0" >> $GITHUB_ENV
+          elif [[ "$COUNT" =~ ^[0-9]+$ && "$COUNT" -gt 0 && "$TEST_RESULT" == "success" ]]; then
+            echo "MSG_STATUS=🟢 Success" >> $GITHUB_ENV
+            echo "MSG_COUNT=$COUNT" >> $GITHUB_ENV
+          elif [[ "$COUNT" =~ ^[0-9]+$ && "$COUNT" -gt 0 ]]; then
+            # Предложения нашлись, но какая-то проверка после поиска не прошла
+            echo "MSG_STATUS=🟡 UI Check Failed" >> $GITHUB_ENV
+            echo "MSG_COUNT=$COUNT" >> $GITHUB_ENV
+          else
+            echo "MSG_STATUS=🔴 Unknown Test Failure" >> $GITHUB_ENV
+            echo "MSG_COUNT=N/A" >> $GITHUB_ENV
+          fi
+
+      - name: Upload Cypress Screenshots & Videos
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cypress-artifacts
+          path: |
+            cypress/screenshots/
+            cypress/videos/
+          if-no-files-found: ignore
+
+      - name: Send Telegram Notification
+        if: always()
+        uses: appleboy/telegram-action@master
+        with:
+          to: >-
+            ${{ (github.event.inputs.user_chat_id != '') &&
+            github.event.inputs.user_chat_id ||
+            secrets.TELEGRAM_CHAT_ID }}
+          token: ${{ secrets.TELEGRAM_TOKEN }}
+          format: markdown
+          message: |
+            ${{ github.event.inputs.user_chat_id != '' && '👤 **Manual Testing**' || '📢 **Hourly Monitoring**' }}
+
+            📂 **Module:** 🚗 B2C Transfer Search Result
+            📊 **Status:** ${{ env.MSG_STATUS }}
+
+            **Offers Found:** ${{ env.MSG_COUNT }}
