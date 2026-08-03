@@ -40,6 +40,7 @@ describe('Transfer Search Flow', () => {
     SUBMIT: 800,
     TAB: 1000,
     OVERLAY: 800,   // анимация открытия/закрытия оверлеев PrimeVue
+    NAVIGATE: 2500, // запас на переход на выдачу перед повторным кликом "Поиск"
     SETTLE: 2000,   // окно, за которое проверяем, что выдача перестала пополняться
   };
 
@@ -56,8 +57,17 @@ describe('Transfer Search Flow', () => {
     // Список подсказок приходит с бэкенда — ждём именно опции, а не оверлей:
     // пустой оверлей PrimeVue успевает отрисоваться раньше ответа.
     cy.get('.p-autocomplete-overlay li.p-autocomplete-option', { timeout: T.UI })
-      .should('have.length.greaterThan', 0)
-      .first()
+      .should('have.length.greaterThan', 0);
+
+    // Берём подсказку по тексту, а не первую в списке. Подсказки отдаёт Yandex
+    // (suggest-maps.yandex.ru), и ранжирует он их по-своему: на запрос
+    // "Центральный железнодорожный вокзал Ташкента" первым приходит "Южный
+    // вокзал города Ташкент", а нужный вариант стоит вторым. Порядок к тому же
+    // не постоянный — поиск по позиции даёт разный маршрут от прогона к прогону.
+    //
+    // cy.contains сам перезапрашивает список, пока совпадение не появится:
+    // подсказки долетают не разом, и нужная может прийти позже первых.
+    cy.contains('.p-autocomplete-overlay li.p-autocomplete-option', value, { timeout: T.UI })
       .should('be.visible')
       .click({ timeout: T.UI });
 
@@ -158,10 +168,12 @@ describe('Transfer Search Flow', () => {
     cy.get(TO_INPUT, { timeout: T.UI }).should('have.value', ROUTE.TO);
 
     // 12. ПОИСК
-    cy.get('.transfer-search__submit', { timeout: T.UI })
-      .should('be.visible')
-      .and('not.be.disabled')
-      .click({ timeout: T.UI });
+    // Клик с повтором: до гидратации Nuxt кнопка кликается вхолостую, а признака
+    // "поиск идёт" у формы нет — сработавший клик виден только по смене адреса.
+    cy.clickUntilUrl('.transfer-search__submit', '/transfer', {
+      timeout: T.UI,
+      pause: PAUSE.NAVIGATE,
+    });
 
     // 13. ПОИСК ДЕЙСТВИТЕЛЬНО УШЁЛ С НУЖНЫМ МАРШРУТОМ
     // Проверка обязательна: при незаполненном поле кнопка молча ничего не

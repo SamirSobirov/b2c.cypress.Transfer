@@ -124,6 +124,55 @@ Cypress.Commands.add('countWhenStable', (selector, options = {}) => {
  *                           timeout — общий бюджет на все попытки
  *                           text    — искать триггер по тексту (cy.contains)
  */
+/**
+ * Клик по кнопке с повтором, пока не сменится адрес страницы.
+ *
+ * Проблема та же, что у clickUntilVisible: до окончания гидратации Nuxt кнопка
+ * видима, не задизейблена и кликабельна, но обработчик на ней ещё не висит —
+ * клик проходит без ошибки и без перехода. Для кнопки "Поиск" это особенно
+ * коварно: у формы нет никакого признака "поиск идёт", и единственное, чем
+ * отличается сработавший клик от несработавшего, — смена адреса.
+ *
+ * Отличие от clickUntilVisible: цель здесь не элемент в DOM, а URL, поэтому
+ * ждать появления ноды нечего.
+ *
+ * Пауза между попытками должна быть с запасом на переход, иначе повторный клик
+ * уйдёт уже по кнопке на странице выдачи и запустит поиск заново.
+ *
+ * @param {string} trigger  — CSS-селектор кнопки
+ * @param {string} fragment — что должно появиться в адресе после перехода
+ * @param {object} options  — { timeout, pause }
+ */
+Cypress.Commands.add('clickUntilUrl', (trigger, fragment, options = {}) => {
+  const { timeout = 30000, pause = 2500 } = options;
+
+  const deadline = Date.now() + timeout;
+  let clicks = 0;
+
+  const attempt = () => {
+    cy.get(trigger, { timeout })
+      .should('be.visible')
+      .and('not.be.disabled')
+      .click({ timeout });
+    clicks += 1;
+    cy.wait(pause);
+
+    cy.url({ log: false }).then((url) => {
+      if (url.includes(fragment)) return;
+
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `🆘 Адрес не сменился на "${fragment}" после ${clicks} клик(ов) по ` +
+          `"${trigger}" за ${timeout} мс — сейчас "${url}"`
+        );
+      }
+      attempt();
+    });
+  };
+
+  attempt();
+});
+
 Cypress.Commands.add('clickUntilVisible', (trigger, target, options = {}) => {
   const { timeout = 30000, pause = 1000, text = null } = options;
 
