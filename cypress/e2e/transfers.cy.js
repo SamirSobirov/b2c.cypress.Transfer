@@ -1,6 +1,3 @@
-// ResizeObserver loop — известный шум браузера на Nuxt-страницах: он приходит
-// при открытии выпадающих списков. К доступности сайта отношения не имеет,
-// тест из-за него ронять нельзя.
 Cypress.on('uncaught:exception', (err) => {
   if (err.message.includes('ResizeObserver')) return false;
 });
@@ -16,9 +13,6 @@ describe('Transfer Search Flow', () => {
     TO: 'Международный аэропорт Ташкента имени Ислама Каримова',
   };
 
-  // Поля "Откуда"/"Куда" — PrimeVue AutoComplete. Их id (pv_id_0_330) Vue
-  // генерирует заново при каждом монтировании, класс один на оба поля —
-  // остаётся placeholder: он различает поля и переживает пересборку.
   const FROM_INPUT = '.transfer-search input[placeholder*="Откуда"]';
   const TO_INPUT = '.transfer-search input[placeholder*="Куда"]';
 
@@ -44,13 +38,7 @@ describe('Transfer Search Flow', () => {
     SETTLE: 2000,   // окно, за которое проверяем, что выдача перестала пополняться
   };
 
-  /**
-   * Заполнение поля "Откуда"/"Куда" с выбором подсказки.
-   *
-   * Просто напечатать адрес недостаточно: бэкенду нужен id места, а он
-   * проставляется только когда пользователь выбрал вариант из выпадающего
-   * списка. Без выбора кнопка "Поиск" молча ничего не делает.
-   */
+ 
   const selectPlace = (selector, value) => {
     cy.fillInput(selector, value, { timeout: T.UI });
 
@@ -58,16 +46,7 @@ describe('Transfer Search Flow', () => {
     // пустой оверлей PrimeVue успевает отрисоваться раньше ответа.
     cy.get('.p-autocomplete-overlay li.p-autocomplete-option', { timeout: T.UI })
       .should('have.length.greaterThan', 0);
-
-    // Берём подсказку по тексту, а не первую в списке. Подсказки отдаёт Yandex
-    // (suggest-maps.yandex.ru), и ранжирует он их по-своему: на запрос
-    // "Центральный железнодорожный вокзал Ташкента" первым приходит "Южный
-    // вокзал города Ташкент", а нужный вариант стоит вторым. Порядок к тому же
-    // не постоянный — поиск по позиции даёт разный маршрут от прогона к прогону.
-    //
-    // cy.contains сам перезапрашивает список, пока совпадение не появится:
-    // подсказки долетают не разом, и нужная может прийти позже первых.
-    cy.contains('.p-autocomplete-overlay li.p-autocomplete-option', value, { timeout: T.UI })
+ cy.contains('.p-autocomplete-overlay li.p-autocomplete-option', value, { timeout: T.UI })
       .should('be.visible')
       .click({ timeout: T.UI });
 
@@ -175,11 +154,6 @@ describe('Transfer Search Flow', () => {
       pause: PAUSE.NAVIGATE,
     });
 
-    // 13. ПОИСК ДЕЙСТВИТЕЛЬНО УШЁЛ С НУЖНЫМ МАРШРУТОМ
-    // Проверка обязательна: при незаполненном поле кнопка молча ничего не
-    // делает, клик проходит без ошибки и тест выглядит зелёным.
-    // Маршрут сверяем по заголовку выдачи, а не по query-строке: адреса в ней
-    // приходят в url-кодировке вперемешку с координатами точек.
     cy.url({ timeout: T.PAGE }).should('include', '/transfer');
     cy.get('main h1', { timeout: T.PAGE })
       .should('contain.text', ROUTE.FROM)
@@ -198,12 +172,7 @@ describe('Transfer Search Flow', () => {
 
     cy.log('✅ Поиск запущен');
 
-    // 15. ПОДСЧЁТ ОФФЕРОВ
-    // Берём не первое значение, а стабилизировавшееся: карточки дорисовываются
-    // после гидратации, иначе в отчёт попадёт случайное число.
-    // Число пишем в файл до проверки: при пустой выдаче отчёт должен показать
-    // "⚪ No Offers" с нулём, а не "🔴 Unknown Test Failure" без числа.
-    cy.countWhenStable(OFFER_CARD, { timeout: T.RESULTS, settle: PAUSE.SETTLE }).then((count) => {
+     cy.countWhenStable(OFFER_CARD, { timeout: T.RESULTS, settle: PAUSE.SETTLE }).then((count) => {
       cy.writeFile('offers_count.txt', count.toString());
       cy.log(`✅ Найдено предложений по трансферу: ${count}`);
 

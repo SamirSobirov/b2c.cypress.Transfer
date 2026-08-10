@@ -2,7 +2,7 @@ name: B2C Transfer Search AutoTest
 
 on:
   schedule:
-    - cron: '0 */5 * * *'
+    - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
       user_chat_id:
@@ -119,7 +119,7 @@ jobs:
           message: |
             ${{ github.event.inputs.user_chat_id != '' && '👤 **Manual Testing**' || '📢 **Hourly Monitoring**' }}
 
-            📂 **Module:** 🚗 B2C Transfer Search Result
+            📂 **Module:** 🚕 B2C Transfer Search Result
             📊 **Status:** ${{ env.MSG_STATUS }}
 
             **Offers Found:** ${{ env.MSG_COUNT }}
