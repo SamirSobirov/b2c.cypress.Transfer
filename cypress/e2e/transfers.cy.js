@@ -36,22 +36,105 @@ describe('Transfer Search Flow', () => {
     OVERLAY: 800,   // анимация открытия/закрытия оверлеев PrimeVue
     NAVIGATE: 2500, // запас на переход на выдачу перед повторным кликом "Поиск"
     SETTLE: 2000,   // окно, за которое проверяем, что выдача перестала пополняться
+
+    // Пауза после загрузки страницы. Разметка на Nuxt приходит с сервера
+    // готовой, а обработчики Vue навешиваются позже — до этого клики уходят
+    // вхолостую. Команды с повтором это переживают, но каждый лишний клик по
+    // вкладке или кнопке "Войти" рискует переоткрыть уже открытое.
+    HYDRATE: 2000,
+
+    // Задержка между символами в полях с подсказками. Мгновенный ввод всей
+    // строки не похож на живой набор: автокомплит рассчитан на поток событий.
+    TYPE: 40,
+
+    // Пауза после выбора подсказки. Выбор — не конец: сайт следом геокодит
+    // место через geocode-maps.yandex.ru, и до ответа у точки нет координат.
+    // Кнопка "Поиск" без координат молча ничего не делает, поэтому уходить с
+    // поля раньше, чем геокодер ответил, нельзя.
+    GEOCODE: 1500,
   };
 
  
-  const selectPlace = (selector, value) => {
-    cy.fillInput(selector, value, { timeout: T.UI });
+  const PLACE_OPTION = '.p-autocomplete-overlay li.p-autocomplete-option';
 
-    // Список подсказок приходит с бэкенда — ждём именно опции, а не оверлей:
-    // пустой оверлей PrimeVue успевает отрисоваться раньше ответа.
-    cy.get('.p-autocomplete-overlay li.p-autocomplete-option', { timeout: T.UI })
-      .should('have.length.greaterThan', 0);
- cy.contains('.p-autocomplete-overlay li.p-autocomplete-option', value, { timeout: T.UI })
-      .should('be.visible')
-      .click({ timeout: T.UI });
+  /**
+   * Заполнение поля "Откуда"/"Куда" с выбором подсказки.
+   *
+   * Просто напечатать адрес недостаточно: бэкенду нужны координаты точки, а их
+   * сайт берёт из выбранной подсказки (геокодит её через Yandex). Без выбора
+   * форма считает поле незаполненным, и кнопка "Поиск" молча ничего не делает.
+   *
+   * Подсказку берём по тексту, а не первую в списке: Yandex ранжирует выдачу
+   * по-своему, и на "Центральный железнодорожный вокзал Ташкента" первым
+   * приходит "Южный вокзал города Ташкент".
+   *
+   * Повтор нужен из-за самого Yandex: на один и тот же запрос он примерно в
+   * трети случаев отвечает HTTP 200 с одним случайным вариантом вместо полного
+   * списка (проверено серией прямых запросов: 5 из 8 удачных по вокзалу, 6 из 8
+   * по аэропорту). Это не ошибка сайта и не гонка в тесте, поэтому ждать дольше
+   * бесполезно — нужен новый запрос. Его порождает повторный ввод: clear()
+   * сбрасывает подсказки, а печать заново запускает debounce (300 мс) и новый
+   * вызов suggest.
+   *
+   * При 6 попытках шанс так и не получить нужную подсказку падает с ~38% до
+   * ~0.3% на поле.
+   */
+  const selectPlace = (selector, value, options = {}) => {
+    const { attempts = 6, wait = 4000, poll = 250 } = options;
+
+    const hasOption = ($body) =>
+      [...$body.find(PLACE_OPTION)].some((el) => el.innerText.includes(value));
+
+    // Опрос вместо фиксированной паузы: когда список пришёл нормальный, идём
+    // дальше сразу, а не досиживаем бюджет ожидания до конца.
+    const waitForOption = (deadline) =>
+      cy.get('body', { log: false }).then(($body) => {
+        if (hasOption($body)) return cy.wrap(true, { log: false });
+        if (Date.now() >= deadline) return cy.wrap(false, { log: false });
+
+        cy.wait(poll, { log: false });
+        return waitForOption(deadline);
+      });
+
+    const attempt = (n) => {
+      cy.fillInput(selector, value, { timeout: T.UI, delay: PAUSE.TYPE });
+
+      // Отсчёт бюджета — внутри cy.then, иначе Date.now() сработал бы в момент
+      // постановки команд в очередь, то есть ДО того, как отработает fillInput.
+      // Печать с задержкой занимает пару секунд и съедала бы бюджет целиком:
+      // опрос начинался бы с уже истёкшим сроком и сразу уходил на повтор.
+      cy.then(() => waitForOption(Date.now() + wait)).then((found) => {
+        if (found) {
+          // Кликаем через cy.contains, а не по сохранённой ноде: список мог
+          // перерисоваться, и она оказалась бы detached.
+          cy.contains(PLACE_OPTION, value, { timeout: T.UI })
+            .should('be.visible')
+            .click({ timeout: T.UI });
+          return;
+        }
+
+        if (n >= attempts) {
+          cy.get('body', { log: false }).then(($body) => {
+            const texts = [...$body.find(PLACE_OPTION)]
+              .map((el) => el.innerText.trim().replace(/\s+/g, ' '));
+
+            throw new Error(
+              `🆘 Yandex ни разу не вернул "${value}" за ${attempts} попыт(ок). ` +
+              `В последнем списке: ${texts.join(' | ') || '(пусто)'}`
+            );
+          });
+          return;
+        }
+
+        cy.log(`Подсказки без "${value}" — повтор ${n + 1} из ${attempts}`);
+        attempt(n + 1);
+      });
+    };
+
+    attempt(1);
 
     cy.get('.p-autocomplete-overlay', { timeout: T.UI }).should('not.exist');
-    cy.wait(PAUSE.FIELD);
+    cy.wait(PAUSE.GEOCODE);
   };
 
   before(() => {
@@ -78,6 +161,7 @@ describe('Transfer Search Flow', () => {
 
     // 2. ПЕРЕХОД НА ГЛАВНУЮ
     cy.visit('https://metatrip.asia/ru/', { timeout: T.PAGE });
+    cy.wait(PAUSE.HYDRATE);
 
     // 3. ОТКРЫТИЕ МОДАЛКИ "ВХОД В ПРОФИЛЬ"
     // Клик с повтором: страница на Nuxt приходит с сервера уже отрисованной,
@@ -125,6 +209,10 @@ describe('Transfer Search Flow', () => {
 
     cy.log('✅ Авторизация прошла успешно');
 
+    // После входа шапка перерисовывается под вошедшего пользователя — даём ей
+    // устояться, прежде чем целиться в вкладки.
+    cy.wait(PAUSE.HYDRATE);
+
     // 9. ВКЛАДКА "ТРАНСФЕРЫ" НА ГЛАВНОЙ
     // Клик с повтором: форма поиска монтируется только после гидратации вкладок.
     cy.clickUntilVisible('button[role="tab"]', '.transfer-search', {
@@ -147,6 +235,9 @@ describe('Transfer Search Flow', () => {
     cy.get(TO_INPUT, { timeout: T.UI }).should('have.value', ROUTE.TO);
 
     // 12. ПОИСК
+    // Обе точки выбраны и геокодированы — даём форме собрать модель до клика.
+    cy.wait(PAUSE.SUBMIT);
+
     // Клик с повтором: до гидратации Nuxt кнопка кликается вхолостую, а признака
     // "поиск идёт" у формы нет — сработавший клик виден только по смене адреса.
     cy.clickUntilUrl('.transfer-search__submit', '/transfer', {

@@ -21,7 +21,11 @@
 Cypress.Commands.add('fillInput', (selector, value, options = {}) => {
   // timeout с запасом: на медленном CI-раннере поле появляется не мгновенно
   // pause — видимая в логе пауза, даёт Vue доперерисовать ноду перед вводом
-  const { attempts = 4, timeout = 30000, pause = 300 } = options;
+  // delay — задержка между символами. По умолчанию 0: для полей входа скорость
+  //   печати ни на что не влияет. Для полей с подсказками её задают явно —
+  //   мгновенный ввод всей строки не похож на живой набор, а обработчики
+  //   автокомплита рассчитаны на поток событий, а не на один блок текста.
+  const { attempts = 4, timeout = 30000, pause = 300, delay = 0 } = options;
 
   const attempt = (n) => {
     // каждый шаг — со свежим запросом ноды, чтобы не попасть в detached-элемент.
@@ -29,7 +33,7 @@ Cypress.Commands.add('fillInput', (selector, value, options = {}) => {
     // actionability (поле видимо, не перекрыто, не анимируется).
     cy.get(selector, { timeout }).should('be.visible').clear({ timeout, log: false });
     cy.wait(pause);
-    cy.get(selector, { timeout }).type(value, { timeout, delay: 0, log: false });
+    cy.get(selector, { timeout }).type(value, { timeout, delay, log: false });
     cy.wait(pause);
 
     cy.get(selector, { timeout }).then(($el) => {
@@ -124,6 +128,38 @@ Cypress.Commands.add('countWhenStable', (selector, options = {}) => {
  *                           timeout — общий бюджет на все попытки
  *                           text    — искать триггер по тексту (cy.contains)
  */
+Cypress.Commands.add('clickUntilVisible', (trigger, target, options = {}) => {
+  const { timeout = 30000, pause = 1000, text = null } = options;
+
+  const deadline = Date.now() + timeout;
+  let clicks = 0;
+
+  const attempt = () => {
+    const $trigger = text
+      ? cy.contains(trigger, text, { timeout })
+      : cy.get(trigger, { timeout });
+
+    $trigger.should('be.visible').click({ timeout });
+    clicks += 1;
+    cy.wait(pause);
+
+    cy.get('body').then(($body) => {
+      if ($body.find(target).length > 0) return;
+
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `🆘 "${target}" не появился после ${clicks} клик(ов) по "${trigger}"` +
+          (text ? ` с текстом "${text}"` : '') +
+          ` за ${timeout} мс — вероятно, страница не догрузилась`
+        );
+      }
+      attempt();
+    });
+  };
+
+  attempt();
+});
+
 /**
  * Клик по кнопке с повтором, пока не сменится адрес страницы.
  *
@@ -164,38 +200,6 @@ Cypress.Commands.add('clickUntilUrl', (trigger, fragment, options = {}) => {
         throw new Error(
           `🆘 Адрес не сменился на "${fragment}" после ${clicks} клик(ов) по ` +
           `"${trigger}" за ${timeout} мс — сейчас "${url}"`
-        );
-      }
-      attempt();
-    });
-  };
-
-  attempt();
-});
-
-Cypress.Commands.add('clickUntilVisible', (trigger, target, options = {}) => {
-  const { timeout = 30000, pause = 1000, text = null } = options;
-
-  const deadline = Date.now() + timeout;
-  let clicks = 0;
-
-  const attempt = () => {
-    const $trigger = text
-      ? cy.contains(trigger, text, { timeout })
-      : cy.get(trigger, { timeout });
-
-    $trigger.should('be.visible').click({ timeout });
-    clicks += 1;
-    cy.wait(pause);
-
-    cy.get('body').then(($body) => {
-      if ($body.find(target).length > 0) return;
-
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `🆘 "${target}" не появился после ${clicks} клик(ов) по "${trigger}"` +
-          (text ? ` с текстом "${text}"` : '') +
-          ` за ${timeout} мс — вероятно, страница не догрузилась`
         );
       }
       attempt();
